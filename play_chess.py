@@ -10,9 +10,9 @@ from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
-out_dir = 'out' # ignored if init_from is not 'resume'
-start = "e4" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt". Nominally \n
-num_samples = 10 # number of samples to draw
+out_dir = 'out-chess' # ignored if init_from is not 'resume'
+start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt". Nominally \n
+num_samples = 1 # number of samples to draw
 max_new_tokens = 500 # number of tokens generated in each sample
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
@@ -73,17 +73,48 @@ else:
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
 
-# encode the beginning of the prompt
-if start.startswith('FILE:'):
-    with open(start[5:], 'r', encoding='utf-8') as f:
-        start = f.read()
-start_ids = encode(start)
-x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+# After here is where the prompt is injected, so "all" you have to do is go back and forth between the user (white) and the GPT (black) and record the game history
+
+# set up all the chessboard stuff
+import chess
+from chessboard import display
+
+board = chess.Board()
+game_board = display.start(board.fen())
+
+current_turn = 1
 
 # run generation
 with torch.no_grad():
     with ctx:
-        for k in range(num_samples):
+        while not display.check_for_quit():
+            user_move = input("You are playing as white. Input your next move: ")
+            start += (user_move + " ")
+
+            board.push_san(user_move) # put user's move in
+            display.update(board.fen(), game_board)
+
+            # encode the beginning of the prompt
+            start_ids = encode(start)
+            x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+            # Generate next move
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
+            output = decode(y[0].tolist())
+            print()
+            print(output)
             print('---------------')
+            print(output.split(' ')[0:current_turn+1])
+
+            gpt_turn = output.split(' ')[current_turn]
+            print(gpt_turn)
+            print()
+
+            board.push_san(gpt_turn) # put GPT's move in
+            display.update(board.fen(), game_board)
+
+            start += (gpt_turn + " ")
+
+            current_turn += 2
+        display.terminate()
